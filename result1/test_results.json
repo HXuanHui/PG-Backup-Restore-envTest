@@ -1,0 +1,182 @@
+[
+  {
+    "target_size": "1GB",
+    "scale_factor": 10,
+    "timestamp": "2026-01-23T10:49:08.445398",
+    "steps": [
+      {
+        "description": "資料填充 (1GB)",
+        "elapsed_time_seconds": 2.441152334213257,
+        "elapsed_time_formatted": "0分2秒",
+        "start_cpu": 2.3,
+        "end_cpu": 27.7,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "[sudo] password for cghadmin: dropping old tables...\ncreating tables...\ngenerating data (client-side)...\n100000 of 1000000 tuples (10%) done (elapsed 0.08 s, remaining 0.74 s)\n200000 of 1000000 tuples (20%) done (elapsed 0.19 s, remaining 0.74 s)\n300000 of 1000000 tuples (30%) done (elapsed 0.29 s, remaining 0.67 s)\n400000 of 1000000 tuples (40%) done (elapsed 0.36 s, remaining 0.54 s)\n500000 of 1000000 tuples (50%) done (elapsed 0.46 s, remaining 0.46 s)\n600000 of 1000000 tuples (60%) done (ela"
+      },
+      {
+        "description": "備份 (1GB)",
+        "elapsed_time_seconds": 264.94354271888733,
+        "elapsed_time_formatted": "4分24秒",
+        "start_cpu": 2.3,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 02:49:03.110 P00   INFO: backup command begin 2.50: --exec-id=1608395-d6b8b036 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --pg1-port=5433 --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-full=2 --stanza=test-backup --type=full\n2026-01-23 02:49:03.820 P00   INFO: execute non-exclusive backup start: backup begins after the next regular checkpoint completes\n2026-01-23 02:53:22.423 P00   INFO: backup start archive = 0000000700",
+        "stderr": "[sudo] password for cghadmin: "
+      },
+      {
+        "description": "還原 (1GB)",
+        "elapsed_time_seconds": 3.079930543899536,
+        "elapsed_time_formatted": "0分3秒",
+        "start_cpu": 2.4,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 02:53:35.115 P00   INFO: restore command begin 2.50: --exec-id=1609547-6a8cf613 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --process-max=2 --repo1-path=/var/lib/pgbackrest --stanza=test-backup\n2026-01-23 02:53:35.124 P00   INFO: repo1: restore backup set 20260123-024903F, recovery will start at 2026-01-23 02:49:03\n2026-01-23 02:53:37.780 P00   INFO: write updated /var/lib/postgresql/16/test/postgresql.auto.conf\n2026-01-23 02:53:37.790 P00  ",
+        "stderr": "[sudo] password for cghadmin: "
+      }
+    ],
+    "database_size": "157 MB",
+    "backup_time": 264.94354271888733,
+    "backup_avg_cpu": 0.0,
+    "restore_time": 3.079930543899536,
+    "restore_avg_cpu": 0.0
+  },
+  {
+    "target_size": "3GB",
+    "scale_factor": 30,
+    "timestamp": "2026-01-23T10:54:02.134324",
+    "steps": [
+      {
+        "description": "資料填充 (3GB)",
+        "elapsed_time_seconds": 5.199660062789917,
+        "elapsed_time_formatted": "0分5秒",
+        "start_cpu": 2.2,
+        "end_cpu": 27.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "[sudo] password for cghadmin: dropping old tables...\ncreating tables...\ngenerating data (client-side)...\n100000 of 3000000 tuples (3%) done (elapsed 0.06 s, remaining 1.71 s)\n200000 of 3000000 tuples (6%) done (elapsed 0.17 s, remaining 2.40 s)\n300000 of 3000000 tuples (10%) done (elapsed 0.29 s, remaining 2.58 s)\n400000 of 3000000 tuples (13%) done (elapsed 0.36 s, remaining 2.33 s)\n500000 of 3000000 tuples (16%) done (elapsed 0.46 s, remaining 2.29 s)\n600000 of 3000000 tuples (20%) done (elaps"
+      },
+      {
+        "description": "備份 (3GB)",
+        "elapsed_time_seconds": 267.4674129486084,
+        "elapsed_time_formatted": "4分27秒",
+        "start_cpu": 28.9,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 02:53:58.835 P00   INFO: backup command begin 2.50: --exec-id=1609743-0b891b8d --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --pg1-port=5433 --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-full=2 --stanza=test-backup --type=full\n2026-01-23 02:53:59.542 P00   INFO: execute non-exclusive backup start: backup begins after the next regular checkpoint completes\n2026-01-23 02:58:18.146 P00   INFO: backup start archive = 0000000800",
+        "stderr": "[sudo] password for cghadmin: "
+      },
+      {
+        "description": "還原 (3GB)",
+        "elapsed_time_seconds": 3.7287168502807617,
+        "elapsed_time_formatted": "0分3秒",
+        "start_cpu": 4.4,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 02:58:33.241 P00   INFO: restore command begin 2.50: --exec-id=1610907-61f21347 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --process-max=2 --repo1-path=/var/lib/pgbackrest --stanza=test-backup\n2026-01-23 02:58:33.250 P00   INFO: repo1: restore backup set 20260123-025359F, recovery will start at 2026-01-23 02:53:59\n2026-01-23 02:58:36.518 P00   INFO: write updated /var/lib/postgresql/16/test/postgresql.auto.conf\n2026-01-23 02:58:36.544 P00  ",
+        "stderr": "[sudo] password for cghadmin: "
+      }
+    ],
+    "database_size": "456 MB",
+    "backup_time": 267.4674129486084,
+    "backup_avg_cpu": 0.0,
+    "restore_time": 3.7287168502807617,
+    "restore_avg_cpu": 0.0
+  },
+  {
+    "target_size": "5GB",
+    "scale_factor": 50,
+    "timestamp": "2026-01-23T10:59:00.885931",
+    "steps": [
+      {
+        "description": "資料填充 (5GB)",
+        "elapsed_time_seconds": 8.190022230148315,
+        "elapsed_time_formatted": "0分8秒",
+        "start_cpu": 4.3,
+        "end_cpu": 25.6,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "[sudo] password for cghadmin: dropping old tables...\ncreating tables...\ngenerating data (client-side)...\n100000 of 5000000 tuples (2%) done (elapsed 0.06 s, remaining 3.15 s)\n200000 of 5000000 tuples (4%) done (elapsed 0.16 s, remaining 3.90 s)\n300000 of 5000000 tuples (6%) done (elapsed 0.25 s, remaining 3.95 s)\n400000 of 5000000 tuples (8%) done (elapsed 0.33 s, remaining 3.77 s)\n500000 of 5000000 tuples (10%) done (elapsed 0.41 s, remaining 3.73 s)\n600000 of 5000000 tuples (12%) done (elapsed"
+      },
+      {
+        "description": "備份 (5GB)",
+        "elapsed_time_seconds": 269.40909814834595,
+        "elapsed_time_formatted": "4分29秒",
+        "start_cpu": 27.3,
+        "end_cpu": 4.4,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 02:59:00.577 P00   INFO: backup command begin 2.50: --exec-id=1611143-6bcf74aa --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --pg1-port=5433 --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-full=2 --stanza=test-backup --type=full\n2026-01-23 02:59:01.282 P00   INFO: execute non-exclusive backup start: backup begins after the next regular checkpoint completes\n2026-01-23 03:03:19.885 P00   INFO: backup start archive = 0000000900",
+        "stderr": "[sudo] password for cghadmin: "
+      },
+      {
+        "description": "還原 (5GB)",
+        "elapsed_time_seconds": 4.462778568267822,
+        "elapsed_time_formatted": "0分4秒",
+        "start_cpu": 2.3,
+        "end_cpu": 0.0,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 03:03:36.983 P00   INFO: restore command begin 2.50: --exec-id=1612314-bf5616e3 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --process-max=2 --repo1-path=/var/lib/pgbackrest --stanza=test-backup\n2026-01-23 03:03:36.993 P00   INFO: repo1: restore backup set 20260123-025901F, recovery will start at 2026-01-23 02:59:01\n2026-01-23 03:03:41.011 P00   INFO: write updated /var/lib/postgresql/16/test/postgresql.auto.conf\n2026-01-23 03:03:41.041 P00  ",
+        "stderr": "[sudo] password for cghadmin: "
+      }
+    ],
+    "database_size": "755 MB",
+    "backup_time": 269.40909814834595,
+    "backup_avg_cpu": 0.0,
+    "restore_time": 4.462778568267822,
+    "restore_avg_cpu": 0.0
+  },
+  {
+    "target_size": "9GB",
+    "scale_factor": 90,
+    "timestamp": "2026-01-23T11:04:05.402927",
+    "steps": [
+      {
+        "description": "資料填充 (9GB)",
+        "elapsed_time_seconds": 14.933481693267822,
+        "elapsed_time_formatted": "0分14秒",
+        "start_cpu": 2.3,
+        "end_cpu": 27.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "[sudo] password for cghadmin: dropping old tables...\ncreating tables...\ngenerating data (client-side)...\n100000 of 9000000 tuples (1%) done (elapsed 0.07 s, remaining 6.06 s)\n200000 of 9000000 tuples (2%) done (elapsed 0.16 s, remaining 7.14 s)\n300000 of 9000000 tuples (3%) done (elapsed 0.27 s, remaining 7.75 s)\n400000 of 9000000 tuples (4%) done (elapsed 0.34 s, remaining 7.36 s)\n500000 of 9000000 tuples (5%) done (elapsed 0.44 s, remaining 7.51 s)\n600000 of 9000000 tuples (6%) done (elapsed 0"
+      },
+      {
+        "description": "備份 (9GB)",
+        "elapsed_time_seconds": 275.42115545272827,
+        "elapsed_time_formatted": "4分35秒",
+        "start_cpu": 25.0,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 03:04:11.811 P00   INFO: backup command begin 2.50: --exec-id=1612634-873198d1 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --pg1-port=5433 --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-full=2 --stanza=test-backup --type=full\n2026-01-23 03:04:12.516 P00   INFO: execute non-exclusive backup start: backup begins after the next regular checkpoint completes\n2026-01-23 03:08:31.120 P00   INFO: backup start archive = 0000000A00",
+        "stderr": "[sudo] password for cghadmin: "
+      },
+      {
+        "description": "還原 (9GB)",
+        "elapsed_time_seconds": 6.1192052364349365,
+        "elapsed_time_formatted": "0分6秒",
+        "start_cpu": 4.4,
+        "end_cpu": 2.3,
+        "avg_cpu": 0.0,
+        "exit_code": 0,
+        "stdout": "2026-01-23 03:08:54.412 P00   INFO: restore command begin 2.50: --exec-id=1613839-838d83d9 --log-level-console=info --log-level-file=detail --pg1-path=/var/lib/postgresql/16/test --process-max=2 --repo1-path=/var/lib/pgbackrest --stanza=test-backup\n2026-01-23 03:08:54.422 P00   INFO: repo1: restore backup set 20260123-030412F, recovery will start at 2026-01-23 03:04:12\n2026-01-23 03:09:00.112 P00   INFO: write updated /var/lib/postgresql/16/test/postgresql.auto.conf\n2026-01-23 03:09:00.123 P00  ",
+        "stderr": "[sudo] password for cghadmin: "
+      }
+    ],
+    "database_size": "1353 MB",
+    "backup_time": 275.42115545272827,
+    "backup_avg_cpu": 0.0,
+    "restore_time": 6.1192052364349365,
+    "restore_avg_cpu": 0.0
+  }
+]
