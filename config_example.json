@@ -1,0 +1,9 @@
+{
+  "host": "your-db-host",
+  "user": "your-ssh-user",
+  "password": "your-ssh-password",
+  "port": 22,
+  "process_max": null,
+  "archive_timeout": null
+}
+

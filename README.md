@@ -20,6 +20,35 @@
 5. **刪除資料目錄**: 清空資料目錄以模擬災難恢復
 6. **還原**: 執行 `pgbackrest` 還原（記錄時間和 CPU）
 
+## 連線設定（避免洩漏機敏資訊）
+
+為了不要在 public repo 中暴露真實主機與帳號密碼，連線資訊改放在本機的設定檔中：
+
+1. 複製範例設定檔：
+   ```bash
+   cp config_example.json config.json
+   ```
+2. 編輯 `config.json`，填入實際的 SSH 連線資訊：
+   ```json
+   {
+     "host": "實際 DB 主機或 IP",
+     "user": "SSH 使用者",
+     "password": "SSH 密碼",
+     "port": 22,
+     "process_max": null,
+     "archive_timeout": null
+   }
+   ```
+3. `config.json` 已經在 `.gitignore` 中，不會被加入 Git / 推到 GitHub。
+4. 你仍然可以用命令列參數覆蓋設定檔，例如：
+   ```bash
+   python pg_backup_restore_test.py --config my_config.json --host 192.168.1.10 --user otheruser
+   ```
+
+> **說明**：
+> - `config_example.json` 範例，已加入版控，內容請保持為假資料或範例值或刪除。
+> - 真正有密碼的 `config.json` 在本機使用，不會出現在 public repo。
+
 ## 版本選擇
 
 ### Python 版本（推薦）
@@ -44,7 +73,7 @@ python pg_backup_restore_test.py
 
 ### Shell 腳本版本
 
-更簡單，不需要 Python 依賴，但需要遠端伺服器安裝 `bc` 命令。
+需要遠端伺服器安裝 `bc` 命令。
 
 **使用方法：**
 ```bash

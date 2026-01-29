@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple
 import sys
 import argparse
 import getpass
+import os
 
 class PostgreSQLTestAutomation:
     def __init__(self, hostname: str, username: str, password: str = None, 
@@ -39,6 +40,7 @@ class PostgreSQLTestAutomation:
         self.archive_timeout = archive_timeout
         self.ssh_client = None
         self.results = []
+        self.cpu_info = {}  # 儲存 CPU 規格資訊
         
         # 建立 SSH 連線
         self.ssh_client = paramiko.SSHClient()
@@ -54,6 +56,13 @@ class PostgreSQLTestAutomation:
             else:
                 raise ValueError("必須提供 password 或 key_file")
             print(f"✓ 成功連線到 {hostname}")
+            
+            # 獲取系統 CPU 規格資訊
+            self.cpu_info = self.get_cpu_info()
+            if self.cpu_info:
+                print(f"✓ 系統 CPU 規格: {self.cpu_info.get('model_name', '未知')}")
+                print(f"  CPU 核心數: {self.cpu_info.get('cpu_cores', '未知')}")
+                print(f"  邏輯 CPU 數: {self.cpu_info.get('logical_cpus', '未知')}")
         except Exception as e:
             print(f"✗ SSH 連線失敗: {e}")
             sys.exit(1)
@@ -93,6 +102,65 @@ class PostgreSQLTestAutomation:
         
         return self.execute_command(full_command, timeout)
     
+    def get_cpu_info(self) -> Dict:
+        """
+        獲取系統 CPU 規格資訊
+        
+        Returns:
+            包含 CPU 資訊的字典
+        """
+        cpu_info = {}
+        
+        # 獲取 CPU 型號
+        model_cmd = "grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^[[:space:]]*//'"
+        model_stdout, _, _ = self.execute_command(model_cmd, timeout=10)
+        if model_stdout.strip():
+            cpu_info['model_name'] = model_stdout.strip()
+        
+        # 獲取物理 CPU 核心數
+        cores_cmd = "grep -c '^processor' /proc/cpuinfo"
+        cores_stdout, _, _ = self.execute_command(cores_cmd, timeout=10)
+        try:
+            logical_cpus = int(cores_stdout.strip())
+            cpu_info['logical_cpus'] = logical_cpus
+        except:
+            cpu_info['logical_cpus'] = '未知'
+        
+        # 獲取物理核心數（如果有超線程，邏輯 CPU = 物理核心 * 2）
+        physical_cores_cmd = "lscpu 2>/dev/null | grep '^CPU(s):' | awk '{print $2}'"
+        physical_cores_stdout, _, _ = self.execute_command(physical_cores_cmd, timeout=10)
+        if physical_cores_stdout.strip():
+            try:
+                cpu_info['cpu_cores'] = int(physical_cores_stdout.strip())
+            except:
+                pass
+        
+        # 如果沒有獲取到物理核心數，嘗試其他方法
+        if 'cpu_cores' not in cpu_info or cpu_info['cpu_cores'] == '未知':
+            # 嘗試從 /proc/cpuinfo 獲取
+            cores_cmd = "grep 'cpu cores' /proc/cpuinfo | head -1 | awk '{print $4}'"
+            cores_stdout, _, _ = self.execute_command(cores_cmd, timeout=10)
+            if cores_stdout.strip():
+                try:
+                    cores_per_socket = int(cores_stdout.strip())
+                    sockets_cmd = "grep 'physical id' /proc/cpuinfo | sort -u | wc -l"
+                    sockets_stdout, _, _ = self.execute_command(sockets_cmd, timeout=10)
+                    if sockets_stdout.strip():
+                        sockets = int(sockets_stdout.strip())
+                        cpu_info['cpu_cores'] = cores_per_socket * sockets
+                except:
+                    pass
+        
+        # 如果還是沒有，使用邏輯 CPU 數作為估算
+        if 'cpu_cores' not in cpu_info or cpu_info['cpu_cores'] == '未知':
+            if 'logical_cpus' in cpu_info and isinstance(cpu_info['logical_cpus'], int):
+                # 假設有超線程，物理核心 = 邏輯 CPU / 2
+                cpu_info['cpu_cores'] = cpu_info['logical_cpus'] // 2
+            else:
+                cpu_info['cpu_cores'] = '未知'
+        
+        return cpu_info
+    
     def get_cpu_usage(self) -> float:
         """
         獲取當前 CPU 使用率（使用 top 命令）
@@ -107,38 +175,280 @@ class PostgreSQLTestAutomation:
     
     def monitor_command_with_cpu(self, command: str, description: str) -> Dict:
         """
-        執行命令並監控 CPU 使用率和時間
+        執行命令並監控 CPU 使用率、IO 使用率和時間
+        針對特定進程（pgbackrest）進行監控，而非系統整體
         
         Returns:
-            包含時間和 CPU 使用率的字典
+            包含時間、CPU 使用率和 IO 使用率的字典
         """
         print(f"\n開始執行: {description}")
         
-        # 使用更可靠的方法監控 CPU（使用 vmstat 或 top）
-        # 創建臨時監控腳本
-        monitor_script = """
-#!/bin/bash
-LOG_FILE=/tmp/cpu_monitor_$$.log
-while true; do
-    if command -v vmstat >/dev/null 2>&1; then
-        vmstat 1 1 | tail -1 | awk '{print 100-$15}'
-    else
-        top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | sed 's/%us,//'
+        # 從命令中提取要監控的進程名稱
+        # 例如：pgbackrest -> pgbackrest, pgbench -> pgbench
+        process_name = "pgbackrest"
+        if "pgbench" in command:
+            process_name = "pgbench"
+        elif "pgbackrest" in command:
+            process_name = "pgbackrest"
+        
+        # 創建監控腳本，監控特定進程及其子進程
+        # 使用普通字符串，然後替換 PROCESS_NAME，避免 f-string 的變量轉義問題
+        monitor_script = """#!/bin/bash
+CPU_LOG=/tmp/cpu_monitor_$$.log
+IO_LOG=/tmp/io_monitor_$$.log
+PROCESS_NAME="{PROCESS_NAME}"
+
+# 函數：獲取指定進程的所有 PID（包括子進程）
+get_process_pids() {{
+    local main_pids=$(pgrep -f "$PROCESS_NAME" 2>/dev/null)
+    local all_pids=""
+    
+    if [ -z "$main_pids" ]; then
+        echo ""
+        return 0
     fi
-    sleep 1
-done > "$LOG_FILE" 2>&1 &
-echo $!
-echo "$LOG_FILE"
-"""
+    
+    for pid in $main_pids; do
+        if [ ! -d "/proc/$pid" ]; then
+            continue
+        fi
+        all_pids="$all_pids $pid"
+        
+        # 獲取該進程的直接子進程
+        if command -v pgrep >/dev/null 2>&1; then
+            local children=$(pgrep -P $pid 2>/dev/null)
+            if [ -n "$children" ]; then
+                all_pids="$all_pids $children"
+                # 遞歸查找子進程的子進程（最多2層）
+                for child in $children; do
+                    if [ -d "/proc/$child" ]; then
+                        local grandchildren=$(pgrep -P $child 2>/dev/null)
+                        if [ -n "$grandchildren" ]; then
+                            all_pids="$all_pids $grandchildren"
+                        fi
+                    fi
+                done
+            fi
+        fi
+    done
+    
+    # 去重並輸出
+    echo "$all_pids" | tr ' ' '\\n' | sort -un | grep -v '^$' | tr '\\n' ' '
+}}
+
+# CPU 監控進程 - 監控特定進程的 CPU 使用率
+(
+    while true; do
+        pids=$(get_process_pids)
+        if [ -n "$pids" ]; then
+            total_cpu=0
+            cpu_count=0
+            
+            # 使用 pidstat 監控特定進程（如果可用，最準確）
+            if command -v pidstat >/dev/null 2>&1; then
+                for pid in $pids; do
+                    if [ -d "/proc/$pid" ]; then
+                        # pidstat -p PID 1 1 表示監控1秒，輸出1次
+                        # 跳過標題行（前3行通常是標題），獲取數據行
+                        pidstat_output=$(pidstat -p $pid 1 1 2>/dev/null)
+                        if [ -n "$pidstat_output" ]; then
+                            # 找到包含 PID 的數據行（跳過標題）
+                            cpu_line=$(echo "$pidstat_output" | tail -n +4 | grep "^[[:space:]]*$pid[[:space:]]" | head -1)
+                            if [ -z "$cpu_line" ]; then
+                                # 如果沒找到，嘗試最後一行（可能是數據行）
+                                cpu_line=$(echo "$pidstat_output" | tail -1)
+                            fi
+                            if [ -n "$cpu_line" ] && ! echo "$cpu_line" | grep -qE '^[[:space:]]*PID|Linux|^$'; then
+                                # %CPU 通常在第 8 列，如果沒有則嘗試第 7 列
+                                cpu=$(echo "$cpu_line" | awk '{{print $8}}' 2>/dev/null)
+                                if [ -z "$cpu" ] || ! echo "$cpu" | grep -qE '^[0-9]+\\.?[0-9]*$'; then
+                                    cpu=$(echo "$cpu_line" | awk '{{print $7}}' 2>/dev/null)
+                                fi
+                                # 驗證是數字
+                                if [ -n "$cpu" ] && echo "$cpu" | grep -qE '^[0-9]+\\.?[0-9]*$'; then
+                                    # 使用 awk 進行浮點數加法
+                                    if [ -z "$total_cpu" ] || [ "$total_cpu" = "0" ]; then
+                                        total_cpu="$cpu"
+                                    else
+                                        total_cpu=$(echo "$total_cpu $cpu" | awk '{{printf "%.2f", $1 + $2}}' 2>/dev/null)
+                                    fi
+                                    if [ $? -eq 0 ] && [ -n "$total_cpu" ]; then
+                                        cpu_count=$((cpu_count + 1))
+                                    fi
+                                fi
+                            fi
+                        fi
+                    fi
+                done
+            else
+                # 使用 top 監控特定進程
+                for pid in $pids; do
+                    if [ -d "/proc/$pid" ]; then
+                        cpu_line=$(top -bn1 -p $pid 2>/dev/null | tail -1)
+                        if [ -n "$cpu_line" ]; then
+                            cpu=$(echo "$cpu_line" | awk '{{print $9}}' 2>/dev/null)
+                            # 驗證是數字（可能是整數或小數）
+                            if [ -n "$cpu" ] && echo "$cpu" | grep -qE '^[0-9]+\\.?[0-9]*$'; then
+                                # 使用 awk 進行浮點數加法
+                                if [ -z "$total_cpu" ] || [ "$total_cpu" = "0" ]; then
+                                    total_cpu="$cpu"
+                                else
+                                    total_cpu=$(echo "$total_cpu $cpu" | awk '{{printf "%.2f", $1 + $2}}' 2>/dev/null)
+                                fi
+                                if [ $? -eq 0 ] && [ -n "$total_cpu" ]; then
+                                    cpu_count=$((cpu_count + 1))
+                                fi
+                            fi
+                        fi
+                    fi
+                done
+            fi
+            
+            if [ $cpu_count -gt 0 ] && [ -n "$total_cpu" ] && [ "$total_cpu" != "0" ]; then
+                echo "$total_cpu"
+            else
+                echo "0"
+            fi
+        else
+            echo "0"
+        fi
+        sleep 1
+    done
+) > "$CPU_LOG" 2>&1 &
+CPU_PID=$!
+
+# IO 監控進程 - 監控特定進程的 IO 速度（使用 pidstat -d）
+(
+    while true; do
+        pids=$(get_process_pids)
+        if [ -n "$pids" ]; then
+            total_io_kb=0
+            
+            # 優先使用 pidstat -d 監控 IO（更準確且支持跨用戶進程）
+            if command -v pidstat >/dev/null 2>&1; then
+                for pid in $pids; do
+                    if [ -d "/proc/$pid" ]; then
+                        # pidstat -d 顯示 IO 統計，1 1 表示監控1秒，輸出1次
+                        pidstat_output=$(pidstat -d -p $pid 1 1 2>/dev/null)
+                        if [ -n "$pidstat_output" ]; then
+                            # 找到數據行（跳過標題行，通常是前3行）
+                            io_line=$(echo "$pidstat_output" | tail -n +4 | grep "^[[:space:]]*$pid[[:space:]]" | head -1)
+                            if [ -z "$io_line" ]; then
+                                # 如果沒找到，嘗試最後一行（可能是數據行）
+                                io_line=$(echo "$pidstat_output" | tail -1)
+                            fi
+                            if [ -n "$io_line" ] && ! echo "$io_line" | grep -qE '^[[:space:]]*PID|Linux|^$'; then
+                                # 讀取 kB_rd/s (第5列) 和 kB_wr/s (第6列)，單位是 kB/s
+                                read_kb=$(echo "$io_line" | awk '{{print $5}}' 2>/dev/null)
+                                write_kb=$(echo "$io_line" | awk '{{print $6}}' 2>/dev/null)
+                                
+                                # 驗證並累加讀取速度
+                                if [ -n "$read_kb" ] && echo "$read_kb" | grep -qE '^[0-9]+\\.?[0-9]*$'; then
+                                    total_io_kb=$(echo "$total_io_kb $read_kb" | awk '{{printf "%.0f", $1 + $2}}' 2>/dev/null)
+                                fi
+                                
+                                # 驗證並累加寫入速度
+                                if [ -n "$write_kb" ] && echo "$write_kb" | grep -qE '^[0-9]+\\.?[0-9]*$'; then
+                                    total_io_kb=$(echo "$total_io_kb $write_kb" | awk '{{printf "%.0f", $1 + $2}}' 2>/dev/null)
+                                fi
+                            fi
+                        fi
+                    fi
+                done
+                
+                # pidstat 已經給出 kB/s，直接輸出
+                if [ -n "$total_io_kb" ] && [ "$total_io_kb" != "0" ]; then
+                    echo "$total_io_kb"
+                else
+                    echo "0"
+                fi
+            else
+                # 備用方案：使用 /proc/PID/io（需要 root 權限或進程屬於同一用戶）
+                prev_total_read=0
+                prev_total_write=0
+                first_read=true
+                
+                curr_total_read=0
+                curr_total_write=0
+                
+                for pid in $pids; do
+                    if [ -f "/proc/$pid/io" ]; then
+                        # 嘗試使用 sudo 讀取（如果可用）
+                        read_bytes=$(sudo cat /proc/$pid/io 2>/dev/null | grep "^read_bytes:" | awk '{{print $2}}')
+                        write_bytes=$(sudo cat /proc/$pid/io 2>/dev/null | grep "^write_bytes:" | awk '{{print $2}}')
+                        if [ -z "$read_bytes" ]; then
+                            # 如果 sudo 失敗，嘗試直接讀取
+                            read_bytes=$(grep "^read_bytes:" /proc/$pid/io 2>/dev/null | awk '{{print $2}}')
+                            write_bytes=$(grep "^write_bytes:" /proc/$pid/io 2>/dev/null | awk '{{print $2}}')
+                        fi
+                        if [ -n "$read_bytes" ] && echo "$read_bytes" | grep -qE '^[0-9]+$'; then
+                            curr_total_read=$((curr_total_read + read_bytes))
+                        fi
+                        if [ -n "$write_bytes" ] && echo "$write_bytes" | grep -qE '^[0-9]+$'; then
+                            curr_total_write=$((curr_total_write + write_bytes))
+                        fi
+                    fi
+                done
+                
+                if [ "$first_read" = "true" ]; then
+                    prev_total_read=$curr_total_read
+                    prev_total_write=$curr_total_write
+                    first_read=false
+                    echo "0"
+                else
+                    if [ $curr_total_read -ge $prev_total_read ] && [ $curr_total_write -ge $prev_total_write ]; then
+                        read_diff=$((curr_total_read - prev_total_read))
+                        write_diff=$((curr_total_write - prev_total_write))
+                        total_diff=$((read_diff + write_diff))
+                        
+                        if [ $total_diff -gt 0 ]; then
+                            io_kb=$(echo "scale=0; $total_diff / 1024" | bc 2>/dev/null)
+                            if [ -z "$io_kb" ] || [ "$io_kb" = "" ]; then
+                                io_kb=$((total_diff / 1024))
+                            fi
+                            echo "$io_kb"
+                        else
+                            echo "0"
+                        fi
+                        
+                        prev_total_read=$curr_total_read
+                        prev_total_write=$curr_total_write
+                    else
+                        prev_total_read=$curr_total_read
+                        prev_total_write=$curr_total_write
+                        echo "0"
+                    fi
+                fi
+            fi
+        else
+            # 進程不存在
+            echo "0"
+        fi
+        sleep 1
+    done
+) > "$IO_LOG" 2>&1 &
+IO_PID=$!
+
+echo $CPU_PID
+echo $IO_PID
+echo "$CPU_LOG"
+echo "$IO_LOG"
+""".format(PROCESS_NAME=process_name)
         
         # 上傳並執行監控腳本
+        # 使用 'EOF' 防止 bash 變量被解釋，但 PROCESS_NAME 已經在 Python 中替換了
         monitor_setup = self.execute_command(
-            f"cat > /tmp/start_monitor.sh << 'EOF'\n{monitor_script}\nEOF\nchmod +x /tmp/start_monitor.sh"
+            f"cat > /tmp/start_monitor.sh << 'MONITOR_EOF'\n{monitor_script}\nMONITOR_EOF\nchmod +x /tmp/start_monitor.sh"
         )
         monitor_output, _, _ = self.execute_command("/tmp/start_monitor.sh")
         monitor_lines = monitor_output.strip().split('\n')
-        monitor_pid = monitor_lines[0] if monitor_lines else ""
-        log_file = monitor_lines[1] if len(monitor_lines) > 1 else "/tmp/cpu_monitor.log"
+        cpu_pid = monitor_lines[0] if len(monitor_lines) > 0 else ""
+        io_pid = monitor_lines[1] if len(monitor_lines) > 1 else ""
+        cpu_log_file = monitor_lines[2] if len(monitor_lines) > 2 else "/tmp/cpu_monitor.log"
+        io_log_file = monitor_lines[3] if len(monitor_lines) > 3 else "/tmp/io_monitor.log"
+        
+        # 等待一小段時間讓監控進程啟動
+        time.sleep(0.5)
         
         # 記錄開始時間和初始 CPU
         start_time = time.time()
@@ -150,17 +460,22 @@ echo "$LOG_FILE"
         else:
             stdout, stderr, exit_code = self.execute_command(command, timeout=3600)
         
-        # 停止 CPU 監控
-        if monitor_pid:
-            self.execute_command(f"kill {monitor_pid} 2>/dev/null; wait {monitor_pid} 2>/dev/null")
+        # 等待一小段時間確保最後的監控數據被記錄
+        time.sleep(1)
+        
+        # 停止監控進程
+        if cpu_pid:
+            self.execute_command(f"kill {cpu_pid} 2>/dev/null; wait {cpu_pid} 2>/dev/null")
+        if io_pid:
+            self.execute_command(f"kill {io_pid} 2>/dev/null; wait {io_pid} 2>/dev/null")
         
         # 計算執行時間
         end_time = time.time()
         elapsed_time = end_time - start_time
         
         # 讀取 CPU 監控數據（平均值和峰值）
-        cpu_avg_cmd = f"cat {log_file} 2>/dev/null | awk '{{sum+=$1; count++}} END {{if(count>0) print sum/count; else print 0}}'"
-        cpu_max_cmd = f"cat {log_file} 2>/dev/null | awk '{{if($1>max || max==\"\") max=$1}} END {{print max+0}}'"
+        cpu_avg_cmd = f"cat {cpu_log_file} 2>/dev/null | awk '{{sum+=$1; count++}} END {{if(count>0) print sum/count; else print 0}}'"
+        cpu_max_cmd = f"cat {cpu_log_file} 2>/dev/null | awk '{{if($1>max || max==\"\") max=$1}} END {{print max+0}}'"
         
         cpu_avg_stdout, _, _ = self.execute_command(cpu_avg_cmd)
         cpu_max_stdout, _, _ = self.execute_command(cpu_max_cmd)
@@ -168,15 +483,36 @@ echo "$LOG_FILE"
         try:
             avg_cpu = float(cpu_avg_stdout.strip())
         except:
-            avg_cpu = self.get_cpu_usage()
+            avg_cpu = 0.0
         
         try:
             max_cpu = float(cpu_max_stdout.strip())
         except:
             max_cpu = avg_cpu
         
+        # 讀取 IO 監控數據（平均值和峰值，單位 kB/s）
+        io_avg_cmd = f"cat {io_log_file} 2>/dev/null | awk '{{sum+=$1; count++}} END {{if(count>0) print sum/count; else print 0}}'"
+        io_max_cmd = f"cat {io_log_file} 2>/dev/null | awk '{{if($1>max || max==\"\") max=$1}} END {{print max+0}}'"
+        
+        io_avg_stdout, _, _ = self.execute_command(io_avg_cmd)
+        io_max_stdout, _, _ = self.execute_command(io_max_cmd)
+        
+        try:
+            avg_io_kb = float(io_avg_stdout.strip())
+        except:
+            avg_io_kb = 0.0
+        
+        try:
+            max_io_kb = float(io_max_stdout.strip())
+        except:
+            max_io_kb = avg_io_kb
+        
+        # 轉換為 MB/s 以便閱讀
+        avg_io_mb = avg_io_kb / 1024.0
+        max_io_mb = max_io_kb / 1024.0
+        
         # 清理臨時檔案
-        self.execute_command(f"rm -f {log_file} /tmp/start_monitor.sh 2>/dev/null")
+        self.execute_command(f"rm -f {cpu_log_file} {io_log_file} /tmp/start_monitor.sh /tmp/target_pids_*.txt 2>/dev/null")
         
         end_cpu = self.get_cpu_usage()
         
@@ -187,14 +523,18 @@ echo "$LOG_FILE"
             'start_cpu': start_cpu,
             'end_cpu': end_cpu,
             'avg_cpu': avg_cpu,
-            'max_cpu': max_cpu,  # 新增 CPU 峰值
+            'max_cpu': max_cpu,
+            'avg_io_kb': avg_io_kb,
+            'max_io_kb': max_io_kb,
+            'avg_io_mb': avg_io_mb,
+            'max_io_mb': max_io_mb,
             'exit_code': exit_code,
             'stdout': stdout[:500] if stdout else "",  # 只保留前500字元
             'stderr': stderr[:500] if stderr else ""
         }
         
         if exit_code == 0:
-            print(f"✓ 完成: {description} - 耗時: {result['elapsed_time_formatted']}, 平均 CPU: {avg_cpu:.2f}%, 峰值 CPU: {max_cpu:.2f}%")
+            print(f"✓ 完成: {description} - 耗時: {result['elapsed_time_formatted']}, 平均 CPU: {avg_cpu:.2f}%, 峰值 CPU: {max_cpu:.2f}%, 平均 IO: {avg_io_mb:.2f} MB/s, 峰值 IO: {max_io_mb:.2f} MB/s")
         else:
             print(f"✗ 失敗: {description} - 退出碼: {exit_code}")
             if stderr:
@@ -262,7 +602,9 @@ echo "$LOG_FILE"
         test_result['steps'].append(backup_result)
         test_result['backup_time'] = backup_result['elapsed_time_seconds']
         test_result['backup_avg_cpu'] = backup_result['avg_cpu']
-        test_result['backup_max_cpu'] = backup_result['max_cpu']  # 新增備份 CPU 峰值
+        test_result['backup_max_cpu'] = backup_result['max_cpu']
+        test_result['backup_avg_io_mb'] = backup_result['avg_io_mb']
+        test_result['backup_max_io_mb'] = backup_result['max_io_mb']
         time.sleep(2)
         
         # 步驟 4: 停止 PostgreSQL
@@ -296,7 +638,9 @@ echo "$LOG_FILE"
         test_result['steps'].append(restore_result)
         test_result['restore_time'] = restore_result['elapsed_time_seconds']
         test_result['restore_avg_cpu'] = restore_result['avg_cpu']
-        test_result['restore_max_cpu'] = restore_result['max_cpu']  # 新增還原 CPU 峰值
+        test_result['restore_max_cpu'] = restore_result['max_cpu']
+        test_result['restore_avg_io_mb'] = restore_result['avg_io_mb']
+        test_result['restore_max_io_mb'] = restore_result['max_io_mb']
         
         # 重新啟動 PostgreSQL（如果需要）
         print("\n重新啟動 PostgreSQL...")
@@ -327,6 +671,20 @@ echo "$LOG_FILE"
             f.write("PostgreSQL 備份還原測試報告\n")
             f.write("="*80 + "\n\n")
             
+            # 顯示系統 CPU 規格資訊
+            if self.cpu_info:
+                f.write("系統資訊:\n")
+                f.write(f"  CPU 型號: {self.cpu_info.get('model_name', '未知')}\n")
+                f.write(f"  物理 CPU 核心數: {self.cpu_info.get('cpu_cores', '未知')}\n")
+                f.write(f"  邏輯 CPU 數: {self.cpu_info.get('logical_cpus', '未知')}\n")
+                if isinstance(self.cpu_info.get('cpu_cores'), int) and isinstance(self.cpu_info.get('logical_cpus'), int):
+                    cpu_cores = self.cpu_info['cpu_cores']
+                    logical_cpus = self.cpu_info['logical_cpus']
+                    if logical_cpus > 0:
+                        max_cpu_percent = (cpu_cores * 100)
+                        f.write(f"  最大 CPU 使用率（相對於物理核心）: {max_cpu_percent}%\n")
+                f.write("\n")
+            
             for result in self.results:
                 f.write(f"\n{'='*80}\n")
                 f.write(f"測試項目: {result['target_size']}\n")
@@ -337,20 +695,44 @@ echo "$LOG_FILE"
                 
                 f.write("備份階段:\n")
                 f.write(f"  耗時: {result.get('backup_time', 0):.2f} 秒\n")
-                f.write(f"  平均 CPU 使用率: {result.get('backup_avg_cpu', 0):.2f}%\n")
-                f.write(f"  峰值 CPU 使用率: {result.get('backup_max_cpu', 0):.2f}%\n\n")
+                backup_avg_cpu = result.get('backup_avg_cpu', 0)
+                backup_max_cpu = result.get('backup_max_cpu', 0)
+                f.write(f"  平均 CPU 使用率: {backup_avg_cpu:.2f}%")
+                if isinstance(self.cpu_info.get('cpu_cores'), int) and self.cpu_info['cpu_cores'] > 0:
+                    backup_avg_cpu_relative = (backup_avg_cpu / (self.cpu_info['cpu_cores'] * 100)) * 100
+                    f.write(f" (相對於物理核心: {backup_avg_cpu_relative:.2f}%)")
+                f.write("\n")
+                f.write(f"  峰值 CPU 使用率: {backup_max_cpu:.2f}%")
+                if isinstance(self.cpu_info.get('cpu_cores'), int) and self.cpu_info['cpu_cores'] > 0:
+                    backup_max_cpu_relative = (backup_max_cpu / (self.cpu_info['cpu_cores'] * 100)) * 100
+                    f.write(f" (相對於物理核心: {backup_max_cpu_relative:.2f}%)")
+                f.write("\n")
+                f.write(f"  平均 IO 速度: {result.get('backup_avg_io_mb', 0):.2f} MB/s\n")
+                f.write(f"  峰值 IO 速度: {result.get('backup_max_io_mb', 0):.2f} MB/s\n\n")
                 
                 f.write("還原階段:\n")
                 f.write(f"  耗時: {result.get('restore_time', 0):.2f} 秒\n")
-                f.write(f"  平均 CPU 使用率: {result.get('restore_avg_cpu', 0):.2f}%\n")
-                f.write(f"  峰值 CPU 使用率: {result.get('restore_max_cpu', 0):.2f}%\n\n")
+                restore_avg_cpu = result.get('restore_avg_cpu', 0)
+                restore_max_cpu = result.get('restore_max_cpu', 0)
+                f.write(f"  平均 CPU 使用率: {restore_avg_cpu:.2f}%")
+                if isinstance(self.cpu_info.get('cpu_cores'), int) and self.cpu_info['cpu_cores'] > 0:
+                    restore_avg_cpu_relative = (restore_avg_cpu / (self.cpu_info['cpu_cores'] * 100)) * 100
+                    f.write(f" (相對於物理核心: {restore_avg_cpu_relative:.2f}%)")
+                f.write("\n")
+                f.write(f"  峰值 CPU 使用率: {restore_max_cpu:.2f}%")
+                if isinstance(self.cpu_info.get('cpu_cores'), int) and self.cpu_info['cpu_cores'] > 0:
+                    restore_max_cpu_relative = (restore_max_cpu / (self.cpu_info['cpu_cores'] * 100)) * 100
+                    f.write(f" (相對於物理核心: {restore_max_cpu_relative:.2f}%)")
+                f.write("\n")
+                f.write(f"  平均 IO 速度: {result.get('restore_avg_io_mb', 0):.2f} MB/s\n")
+                f.write(f"  峰值 IO 速度: {result.get('restore_max_io_mb', 0):.2f} MB/s\n\n")
             
             # 總結表格
             f.write("\n" + "="*80 + "\n")
             f.write("測試總結\n")
             f.write("="*80 + "\n")
-            f.write(f"{'資料大小':<12} {'資料庫大小':<12} {'備份時間(秒)':<14} {'備份CPU平均(%)':<16} {'備份CPU峰值(%)':<16} {'還原時間(秒)':<14} {'還原CPU平均(%)':<16} {'還原CPU峰值(%)':<16}\n")
-            f.write("-"*120 + "\n")
+            f.write(f"{'資料大小':<12} {'資料庫大小':<12} {'備份時間(秒)':<14} {'備份CPU平均(%)':<16} {'備份CPU峰值(%)':<16} {'備份IO平均(MB/s)':<18} {'備份IO峰值(MB/s)':<18} {'還原時間(秒)':<14} {'還原CPU平均(%)':<16} {'還原CPU峰值(%)':<16} {'還原IO平均(MB/s)':<18} {'還原IO峰值(MB/s)':<18}\n")
+            f.write("-"*200 + "\n")
             
             for result in self.results:
                 f.write(f"{result['target_size']:<12} "
@@ -358,9 +740,13 @@ echo "$LOG_FILE"
                        f"{result.get('backup_time', 0):<14.2f} "
                        f"{result.get('backup_avg_cpu', 0):<16.2f} "
                        f"{result.get('backup_max_cpu', 0):<16.2f} "
+                       f"{result.get('backup_avg_io_mb', 0):<18.2f} "
+                       f"{result.get('backup_max_io_mb', 0):<18.2f} "
                        f"{result.get('restore_time', 0):<14.2f} "
                        f"{result.get('restore_avg_cpu', 0):<16.2f} "
-                       f"{result.get('restore_max_cpu', 0):<16.2f}\n")
+                       f"{result.get('restore_max_cpu', 0):<16.2f} "
+                       f"{result.get('restore_avg_io_mb', 0):<18.2f} "
+                       f"{result.get('restore_max_io_mb', 0):<18.2f}\n")
         
         print(f"\n✓ 測試報告已生成:")
         print(f"  - JSON: {output_file}")
@@ -378,12 +764,12 @@ def main():
     主程式
     """
     parser = argparse.ArgumentParser(description='PostgreSQL 備份還原自動化測試')
-    parser.add_argument('--host', '-H', type=str, default='10.31.155.37',
-                       help='SSH 主機名稱或 IP (預設: 10.31.155.37)')
-    parser.add_argument('--user', '-u', type=str, default='cghadmin',
-                       help='SSH 使用者名稱 (預設: cghadmin)')
-    parser.add_argument('--password', '-p', type=str, default='cgH@Dmin2025',
-                       help='SSH 密碼 (預設: cgH@Dmin2025)')
+    parser.add_argument('--host', '-H', type=str, default='127.0.0.1',
+                       help='SSH 主機名稱或 IP (預設: 127.0.0.1，建議改由本機 config.json 設定)')
+    parser.add_argument('--user', '-u', type=str, default='postgres',
+                       help='SSH 使用者名稱 (預設: postgres，建議改由本機 config.json 設定)')
+    parser.add_argument('--password', '-p', type=str, default='',
+                       help='SSH 密碼（預設為空字串，建議改由本機 config.json 或互動模式輸入）')
     parser.add_argument('--key-file', '-k', type=str, default=None,
                        help='SSH 金鑰檔案路徑（如果使用金鑰認證）')
     parser.add_argument('--port', type=int, default=22,
@@ -398,8 +784,36 @@ def main():
                        help='pgbackrest 最大進程數（用於並發備份，例如: 4）')
     parser.add_argument('--archive-timeout', type=int, default=None,
                        help='pgbackrest 歸檔超時時間（秒，例如: 300 表示 5 分鐘）')
+    parser.add_argument('--config', type=str, default='config.json',
+                       help='連線設定檔路徑（預設: config.json，如存在會覆蓋 --host/--user/--password/--port 等參數）')
     
     args = parser.parse_args()
+
+    # 從本機設定檔載入連線資訊（不會被版控到 GitHub）
+    config = {}
+    if args.config and os.path.exists(args.config):
+        try:
+            with open(args.config, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"⚠ 無法讀取設定檔 {args.config}: {e}")
+            config = {}
+
+    # 如果設定檔有提供值，覆蓋 argparse 預設 / 命令列值
+    if isinstance(config, dict):
+        if 'host' in config and config['host']:
+            args.host = config['host']
+        if 'user' in config and config['user']:
+            args.user = config['user']
+        if 'password' in config:
+            # 允許密碼為空字串，但如果 key 存在就以設定檔為準
+            args.password = config['password']
+        if 'port' in config and config['port']:
+            args.port = int(config['port'])
+        if 'process_max' in config and config['process_max'] is not None:
+            args.process_max = int(config['process_max'])
+        if 'archive_timeout' in config and config['archive_timeout'] is not None:
+            args.archive_timeout = int(config['archive_timeout'])
     
     print("PostgreSQL 備份還原自動化測試")
     print("="*60)

@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+
+# 測試輸出結果
+test_results.json
+test_results_report.txt
+result*/
+
+# 本機連線設定檔（不要上傳到 GitHub）
+config.json
+
